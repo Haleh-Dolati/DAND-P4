@@ -1,0 +1,1022 @@
+---
+title: 'Exploratory Data Analysis:'
+subtitle: 'Presidential Campaign Contribution in Ohio '
+---
+Haleh Dolati
+=============================
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+# Loading all of the packages that I'm going to use in my analysis 
+library(data.table)
+library(gapminder)
+library(ggplot2)
+library(GGally)
+library(plotly)
+library(reshape2)
+library(RColorBrewer)
+library(Hmisc)
+library(dplyr)
+library(gridExtra)
+library(grid)
+library(ggplot2)
+library(lattice)
+library(ggplot2)
+library(tidyr)
+library(rgeos)
+library(gpclib)
+library(maptools)
+library(sp)
+library(rgdal)
+library(scales)
+library(ggmap)
+library(zoo)
+library(mapproj)
+```
+
+```{r echo=FALSE, warning=FALSE}
+# Load the Data
+#setwd('P4-submission')
+election<-read.csv("OH_Election.csv")
+
+```
+
+###Introduction
+> I chose the “Financial Contributions to Presidential Campaigns” data for the
+State of Ohio. I chose Ohio because I went to The Ohio Stated University and
+am fairly familiar with the state's political dynamics. Ohio is considered a 
+swing state, which makes it very interesting to study. This data set has the 
+data for 167,259 donations.
+
+###Summary of Data Set 
+> Now that I know what kind of data I have in this dataset, I would like to
+get some general information, like data types.
+
+
+```{r echo=FALSE, warning=FALSE}
+str(election)
+```
+###Initial Observation from the Summary
+> This dataset contains individuals’ financial contributions to 2016
+presidential candidates.  It shows whom, how much, when, and where contributed
+to every single candidate during both primary and general elections.  
+However, there are some variables in the contribution data that do not give 
+us any insight like the candidates ID number. So I decided to keep 
+only 9 variables: "cmte_id","cand_id","contbr_st","receipt_desc","memo_cd",
+"memo_text","form_tp","file_num", and "tran_id"
+
+```{r echo=FALSE, warning=FALSE}
+election <- election[,!names(election) %in%
+                    c("cmte_id","cand_id","contbr_st","receipt_desc",
+                      "memo_cd","memo_text","form_tp","file_num","tran_id")]
+str(election)
+```
+
+> I also noticed the zip codes probably need some cleaning. So I'm going to 
+first make sure only 5 digit zip codes are present in the variable. I will 
+replace the unfit zip codes with NA. 
+
+```{r echo=FALSE, warning=FALSE}
+election$contbr_zip <- substring(election$contbr_zip, 1, 5)
+summary(as.numeric(election$contbr_zip))
+```
+
+> Since the Min and max zip codes are out of range, I've decided to convert 
+any zip code that does not start with 43, 44, and 45 since all zip codes in 
+Ohio should start with these numbers. The first zip code is 43001 and the 
+last one is 45999.  
+
+```{r echo=FALSE, warning=FALSE}
+in_ohio <- as.character(seq(43000, 46000,1))
+election$contbr_zip <- ifelse(election$contbr_zip %in% in_ohio, 
+                              election$contbr_zip, 'NA')
+summary(as.numeric(election$contbr_zip))
+```
+
+> Now that I cleaned up the zip code variable, the first questions that came 
+to my mind were: who received more money overall? Which party received more 
+money? How contributions changed general and primary elections?  However, 
+I’ve noticed the party affiliation is missing fro this dataset.  Therefore, 
+if I want to answer couple of these questions I need to add that to the 
+dataset. First I need a list of candidates: 
+
+```{r echo=FALSE, warning=FALSE}
+cat("Candidates: ", "\n")
+levels(election$cand_nm)
+```
+
+> Based on my initial though on visualization and analysis, I need to add two
+other variables. The first one is a new variable for each candidate's party
+affiliation.  
+The second one is a categorical one (based on the donation amount) for the 
+level of contribution so I can see if there is any differences between number 
+of small and big donors regarding the candidate that they chose. I chose the
+following categories:   
+[0-$50) [$50-$100) [$100, $500) [$500, $2700) [$2700, )  
+My next step is to apply this grouping to all three datasets: election, 
+primary and general.  
+
+```{r echo=FALSE, warning=FALSE, Load_the_Data}
+Democrat <- c("Clinton, Hillary Rodham", 
+              "Sanders, Bernard", 
+              "O'Malley, Martin Joseph", 
+              "Lessig, Lawrence", 
+              "Webb, James Henry Jr.")
+Republican <- c("Bush, Jeb", "Carson, Benjamin S.",
+                 "Christie, Christopher J.", "Cruz, Rafael Edward 'Ted'",
+                 "Fiorina, Carly", "Graham, Lindsey O.",
+                 "Huckabee, Mike", "Jindal, Bobby",
+                 "Kasich, John R.", "Pataki, George E.",
+                 "Paul, Rand", "Perry, James R. (Rick)",
+                 "Rubio, Marco", "Santorum, Richard J.",
+                 "Trump, Donald J.", "Walker, Scott")
+Libertarian <- c("Johnson, Gary")
+Independent <- c("McMullin, Evan" )
+GreenParty <- c("Stein, Jill")
+
+election$party <- ifelse(election$cand_nm %in% Democrat, "Democrat",
+        ifelse(election$cand_nm %in% Republican, "Republican",
+        ifelse(election$cand_nm %in% Libertarian, "Libertarian",
+        ifelse(election$cand_nm %in% GreenParty, "GreenParty",
+        ifelse(election$cand_nm %in% Independent, "Independent",
+                        NA  )))))
+```
+
+```{r echo=FALSE, warning=FALSE}
+group_donation <- function(contb_receipt_amt) {
+                  Contributions <- as.integer(contb_receipt_amt)
+                  if (Contributions < 50) {
+                    return("[0-$50)")
+                  } else if (Contributions < 100) {
+                    return("[$50-$100)")
+                  } else if (Contributions < 500) {
+                    return("[$100, $500)")
+                  } else if (Contributions <= 2700) {
+                    return ("[$500, $2700)")
+                  } else {
+                    return ("[$2700, )")
+                  }
+              }
+
+
+# apply the function to create a new column in election
+election$donation_level <- apply(election, 1, function(x) 
+  group_donation(x["contb_receipt_amt"]))
+# convert that column to ordered factors, so we can sort
+election$donation_level <- factor(election$donation_level, 
+                             levels = c("[0-$50)", "[$50-$100)", 
+                                        "[$100, $500)", "[$500, $2700)", 
+                                        "[$2700, )"))
+```
+> This data set has information on when each donation were made. In order to 
+make it ready for plotting, I have to convert the contb_receipt_dt (date of 
+donation) into a date type variable so I can track contributions over time. 
+The original format is 11-Jul-16 and I'm going to convert them to 2016-07-11.
+
+```{r echo=FALSE, warning=FALSE}
+election$contb_receipt_dt <- as.Date(election$contb_receipt_dt, "%d-%b-%y")
+
+```
+
+> And finally I've noticed was the data has the information on contributions 
+for both primary and general elections. I would like to see how donation has 
+changed from primary to general election so the next step for me is to make 
+two separate data frames for them: primary_election and general_election.
+
+```{r echo=FALSE, warning=FALSE}
+primary_election <- subset(election, election_tp=='P2016')
+general_election <- subset(election, election_tp=='G2016')
+```
+# Univariate Plots Section
+
+> My first question is: How much Ohioan contributed to the 2016 presidential 
+election? But before I answer this question I took a look at the contribution 
+receipt amount data and found out there are some negative contributions 
+(probably refunds). I manually checked couple of those negative records and 
+found out there are positive records from the same contributor for the exact 
+same amount but with a positive sign. Both records for these cancelled 
+transactions need to be excluded. Here is the new summary of election data:
+
+```{r echo=FALSE, warning=FALSE}
+election$abs_amount <- abs(election$contb_receipt_amt)
+setorder(election, 'abs_amount', 'contbr_nm', 'contb_receipt_dt', 
+         'contb_receipt_amt')
+election_sum <- rollapply(zoo(election$contb_receipt_amt), 2, sum)
+election_sum <- c(1, election_sum)
+election$sum <- election_sum
+election$sum <- ifelse(election$contb_receipt_amt < 0, 0, election$sum)
+
+election <- subset(election, sum != 0 )
+str(election)
+```
+
+```{r echo=FALSE, warning=FALSE}
+total_donation = sum(election$contb_receipt_amt)
+primary_donation = sum(primary_election$contb_receipt_amt)
+general_donation = sum(general_election$contb_receipt_amt)
+cat("Total dollars donated during 2016 presidential election:", 
+    sum(election$contb_receipt_amt), "\n")
+cat("Total dollars donated 2016 presidential primary election:", 
+    sum(primary_election$contb_receipt_amt), "\n")
+cat("Total dollars donated 2016 presidential general election:", 
+    sum(general_election$contb_receipt_amt), "\n")
+cat("Total count of donations:", length(election$contb_receipt_amt), "\n")
+cat("Total number of donors:", length(unique(election$contbr_nm)))
+```
+
+> Well, majority of the contributions happened during the primaries. I also 
+noticed the sum of contributions during primary and general election is lower 
+than total contributions. I checked the data and it is because there were 
+other types of denotable election type in the state of Ohio during the 
+presidential race. Let’s take a look at the distribution of these donations 
+based on the amount of them.
+
+```{r echo=FALSE, warning=FALSE}
+total_donation_dist <- ggplot(aes(x = contb_receipt_amt), data = election) + 
+  geom_histogram(binwidth = 500)+ 
+  scale_y_log10()+
+  labs(title='Total')+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+primary_donation_dist <- ggplot(aes(x = contb_receipt_amt), 
+                                data = primary_election) +
+  scale_y_log10()+
+  geom_histogram(binwidth = 500)+
+  labs(title='Primary')+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+general_donation_dist <- ggplot(aes(x = contb_receipt_amt), 
+                                data = general_election) + 
+  scale_y_log10()+
+  geom_histogram(binwidth = 500)+ 
+  labs(title='General')+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+grid.arrange(total_donation_dist, primary_donation_dist, 
+             general_donation_dist, ncol=3)
+```
+
+> It looks like majority of the donations were small donations. However, maximum legal contribution by individuals is $2700. I'm going to take a look at those donations that were made by individuals, not the corporations. Also I'm not interested in refunds, so the negative ones are going to be excluded as well.
+
+```{r echo=FALSE, warning=FALSE}
+total_donation_dist_2700 <- ggplot(aes(x = contb_receipt_amt), data = election) +
+  geom_histogram(binwidth = 100)+
+  labs(title='Total')+
+  scale_x_continuous(limits = c(0, 2700),breaks = seq(0, 2700, 500)) +
+  scale_y_continuous(limits = c(0, 30000),breaks = seq(0, 30000, 5000))
+primary_donation_dist_2700 <- ggplot(aes(x = contb_receipt_amt), 
+                                     data = primary_election) + 
+  geom_histogram(binwidth = 100)+
+  labs(title='Primary')+
+  scale_x_continuous(limits = c(0, 2700),breaks = seq(0, 2700, 500)) +
+  scale_y_continuous(limits = c(0, 20000),breaks = seq(0, 20000, 5000))
+general_donation_dist_2700 <- ggplot(aes(x = contb_receipt_amt), 
+                                     data = general_election) + 
+  geom_histogram(binwidth = 100)+
+  labs(title='General')+
+  scale_x_continuous(limits = c(0, 2700),breaks = seq(0, 2700, 500)) +
+  scale_y_continuous(limits = c(0, 15000),breaks = seq(0, 15000, 5000))
+total_donation_dist_2700
+primary_donation_dist_2700
+general_donation_dist_2700
+
+```
+
+  > So overall, the majority of donations were under $100. What about the donations that each party and each candidate received from individual Ohioan (under $2700)?
+(Range of number of donations for different parties are significantly different. Therefore, I’m going to use logarithm (log10) to scale the numbers. )
+
+```{r echo=FALSE, warning=FALSE}
+ggplot(aes(x = contb_receipt_amt), data = election) + 
+  geom_histogram(binwidth = 50)+ 
+  scale_x_continuous(limits = c(0, 2700),breaks = seq(0, 2700, 1000)) +
+  scale_y_log10()+
+  facet_wrap(~party)
+```
+
+```{r echo=FALSE, warning=FALSE}
+ggplot(data = election, aes( x = cand_nm)) +
+  geom_bar() +  
+  scale_y_log10()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+```
+
+
+
+```{r echo=FALSE, warning=FALSE}
+ggplot(aes(x = contb_receipt_amt), data = election) + 
+  geom_histogram(binwidth = 50)+ 
+  scale_x_continuous(limits = c(0, 2700),breaks = seq(0, 2700, 1000)) +
+  scale_y_continuous(trans='log10')+
+  facet_wrap(~cand_nm)
+
+```
+
+> All I can say from these of plots is:  
+1- Overall, Democrats and republicans received the majority of the money  
+2- Clinton, Sanders, Trump, Cruz, Carson, and Kasich are the top 5 candidates 
+in terms of donations to their campaigns.  
+The last variable that I would like to take a look at is the date. I would 
+like to see how the number of contributions changed during the election year:
+
+
+```{r echo=FALSE, warning=FALSE}
+ggplot(aes(x=contb_receipt_dt), data=election) +
+    geom_histogram(binwidth = 7) 
+```
+
+> After primaries more donations were make. The next chart I would like to see
+is how number of donations were changed for each candidate? 
+
+```{r echo=FALSE, warning=FALSE}
+ggplot(aes(x=contb_receipt_dt), data=election) +
+    geom_histogram(binwidth = 7)+
+  scale_y_log10()+
+  facet_wrap(~cand_nm)
+```
+
+> Naturally trump and Clinton received more donations for the general election
+(after primaries) but Sanders also received many donations before the general 
+election.  
+
+# Univariate Analysis  
+### What is the structure of your dataset?  
+> Federal Election Commission collects data on every single donation and refund
+to all candidates for all elections. The data that I'm using provides detailed
+information on 167259 donations that were made during 2016 presidential 
+election (primary and general) to 24 candidates. There are 18 variables for 
+each contribution. To understand the data better, I also downloaded the 
+“Data Description” that the Federal Election Commission's website provided. 
+The followings are the description of each column:
+
+Abbreviation  | Description | Type
+------------- | ------------- | -------------
+CMTE_ID | COMMITTEE ID | S  
+CAND_ID | CANDIDATE ID | S  
+CAND_NM | CANDIDATE NAME | S  
+CONTBR_NM | CONTRIBUTOR NAME | S  
+CONTBR_CITY | CONTRIBUTOR CITY | S  
+CONTBR_ST | CONTRIBUTOR STATE | S  
+CONTBR_ZIP | CONTRIBUTOR ZIP CODE | S  
+CONTBR_EMPLOYER | CONTRIBUTOR EMPLOYER | S  
+CONTBR_OCCUPATION | CONTRIBUTOR OCCUPATION | S  
+CONTB_RECEIPT_AMT | CONTRIBUTION RECEIPT AMOUNT | N  
+CONTB_RECEIPT_DT | CONTRIBUTION RECEIPT DATE | D	  
+RECEIPT_DESC | RECEIPT DESCRIPTION | S
+MEMO_CD | MEMO CODE | S
+MEMO_TEXT | MEMO TEXT	 | S
+FORM_TP | FORM TYPE | S
+FILE_NUM | FILE NUMBER | N
+TRAN_ID | TRANSACTION ID | S
+
+### What is/are the main feature(s) of interest in your dataset?
+> The main features of interest are the number of contributions, recipients of 
+those contributions, the amount of the contributions, recipients of those
+contributions, and the contributors. 
+
+### What other features in the dataset do you think will help support your 
+###investigation into your feature(s) of interest?
+> The occupation of the contributors, the cities and the zip codes that the 
+contributions are coming from.
+
+### Did you create any new variables from existing variables in the dataset?
+> I created two new variables: party and donation_level. Party is the 
+candidates’ affiliated political party. Donation level is a categorical 
+variable that shows the level of donation in 5 categories:  
+[0-$50), [$50-$100), [$100, $500), [$500, $2700), [$2700, )
+
+### Of the features you investigated, were there any unusual distributions? 
+###Did you perform any operations on the data to tidy, adjust, or change the 
+###form of the data? If so, why did you do this?
+> I change the date's data type from 11-Jul-16 to 2016-07-11. This way I can 
+plot the contribution over time. Also I cleaned up the zip code variable to 5 
+digit format. 
+
+# Bivariate Plots Section
+> I would like to see the relationship between contribution amount and party 
+and candidates. So I'm going to take a look at the box plot:  
+
+```{r echo=FALSE, warning=FALSE}
+ggplot(aes(x = party, y = contb_receipt_amt, fill = party), data = election) +
+  geom_boxplot() +
+  coord_cartesian(ylim = c(0, 2700)) +
+  scale_fill_manual(values = c('blue','green',  'gold', 'pink','red'))
+```
+
+> Although I just looked and small donations (under $2700) still the variety 
+of donation amount are too much. I'm going to take a look at the log of them 
+first then I will use other plot types to explore them further.
+
+```{r echo=FALSE, warning=FALSE}
+ggplot(aes(x = party, y = contb_receipt_amt, fill = party), data = election) +
+  geom_boxplot() +
+  scale_y_log10() +
+  scale_fill_manual(values = c('blue','green',  'gold', 'pink','red'))
+```
+
+> It looks the median contribution amount is lower for democrats compare to 
+others and there are so many outliers for both republicans and democrats.  
+My next question is How much money each party received overall, during primary 
+and general?
+
+```{r echo=FALSE, warning=FALSE}
+
+group_by_party<- election %>%
+  group_by(party) %>%
+  summarise(mean_cand_nm=mean(contb_receipt_amt),
+            median_cand_nm=median(contb_receipt_amt),
+            sum_contribution = sum(contb_receipt_amt),
+            Percent_contb= sum(contb_receipt_amt)*100/total_donation,
+            n=n())%>%
+  ungroup()
+group_by_party_primary<- primary_election %>%
+  group_by(party) %>%
+  summarise(mean_cand_nm_p = mean(contb_receipt_amt),
+            median_cand_nm_p = median(contb_receipt_amt),
+            sum_contribution_p = sum(contb_receipt_amt),
+            Percent_contb_p = sum(contb_receipt_amt)*100/total_donation,
+            n=n())%>%
+  ungroup()
+#
+group_by_party_general<- general_election %>%
+  group_by(party) %>%
+  summarise(mean_cand_nm_g = mean(contb_receipt_amt),
+            median_cand_nm_g = median(contb_receipt_amt),
+            sum_contribution_g = sum(contb_receipt_amt),
+            Percent_contb_g = sum(contb_receipt_amt)*100/total_donation,
+            n=n())%>%
+  ungroup()
+group_by_party_P_G <- merge(group_by_party_primary, group_by_party_general, 
+                            by="party")
+group_by_party_P_G_A <- merge(group_by_party, group_by_party_P_G, by="party")
+group_by_party_P_G_A
+```
+
+```{r echo=FALSE, warning=FALSE}
+slices <- group_by_party_P_G_A$sum_contribution
+lbls <- group_by_party_P_G_A$party
+pie(slices, labels = lbls, main="Pie Chart of Campaign Contributions", 
+    col = rainbow(length(slices)))
+legend("topright", c("Republican", "GreenParty","Democrat",
+                     "Libertarian" ), cex = 0.7,
+   fill = rainbow(length(slices)))
+
+```
+
+> The pie chart clearly shows that the two major political parties received the majority 
+of the monetary contributions. However, since the amount of contribution is extreamly different between the political parties, the other 3 values are almost hidden. Inorder to see them better, I'm going to make a bar chart with log10 of values:
+
+```{r echo=FALSE, warning=FALSE}
+ggplot(aes(x=party, y=sum_contribution), data=group_by_party_P_G_A)+
+  geom_histogram(stat= "identity")
+
+```
+
+> The bar charts highlights the difference even more.  Since the other parties did not receive that 
+much money, I'm going to compare only Republicans and Democrats for primary 
+and general election.
+
+
+```{r echo=FALSE, warning=FALSE}
+sub_for_bar <- data.frame(group_by_party_P_G_A$party,
+                          group_by_party_P_G_A$sum_contribution_p,
+                          group_by_party_P_G_A$sum_contribution_g)
+names(sub_for_bar) <- c("party", "primary", "general")
+
+sub_for_bar <- subset(sub_for_bar, 
+                    party=='Democrat' | party=='Republican')
+melted <- melt(sub_for_bar, id.var= "party")
+ggplot(melted, aes(x=party, y=value, fill= variable))+
+  geom_bar(stat="identity")
+```
+
+
+
+
+
+> Now I want to know how different is the amount of money that each candidate 
+received from Ohioans over all? What about the average donation amount?
+
+```{r echo=FALSE, warning=FALSE}
+group_by_candidate<- election %>%
+  group_by(cand_nm) %>%
+  summarise(mean_cand_nm=mean(contb_receipt_amt),
+            median_cand_nm=median(contb_receipt_amt),
+            sum_contribution = sum(contb_receipt_amt),
+            n=n())
+
+sum_contribution <- ggplot(data = group_by_candidate, 
+                           aes(x = reorder(cand_nm, -sum_contribution), 
+                               y = sum_contribution)) +
+  geom_bar(stat = "identity") +
+  labs(y = "Total Donations", 
+       title = "Candidate") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+mean_contribution <- ggplot(data = group_by_candidate, 
+                            aes(x = reorder(cand_nm, -mean_cand_nm), 
+                                y = mean_cand_nm)) +
+  geom_bar(stat = "identity") +
+  labs(y = "Total Donations", 
+       title = "Candidate") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+mean_contribution
+sum_contribution
+```
+
+> It looks like three candidates received way more money than the others. 
+Overall Ohioan donated more money to Hillary Clinton's campaign than any other
+candidate. Apparently Kasich and Bush supporters donated more money on average
+per donation but O'Malley and Pataki are not far behind. George Pataki received
+the least amount of money from them, which is really interesting since Pataki's
+supporters donated on average more money than many other candidates. In 
+contrast, Sanders has the forth place when it comes to the total contribution 
+but he has the lowest mean contribution!  
+Another question is who from each party received the most money? To answer this
+question, we only need to find the candidate from Republican Party who received
+he most money: Clinton received the most money overall, therefore she got the 
+most money among democrats as well.  Libertarian, Independent, and Green Party
+had only one candidate so there is nothing to compare. So now I'm going to find
+among republicans, who received the most monetary contribution?
+
+
+```{r echo=FALSE, warning=FALSE}
+Rebuplican_party_cand <- subset(election, party=='Republican')
+Rebuplican_group <- Rebuplican_party_cand %>%
+  group_by(cand_nm) %>%
+  summarise(sum_contribution = sum(contb_receipt_amt),
+            n=n())
+Rebuplican_group$cand_nm[which.max( Rebuplican_group$sum_contribution )]
+
+```
+
+> Kasich received the most amounts of contributions, which makes sense since he
+is the governor of Ohio and Pataki received the least amount of money among 
+republicans.
+But another thing came to my attention: Kasich received all those money during 
+the primary election, while contribution to Trump and Clinton's campaign 
+continued since they were nominees. So I would like to see primary and general 
+election contribution stats separately: 
+ 
+
+
+```{r echo=FALSE, warning=FALSE}
+primary_group_by_candidate<- primary_election %>%
+  group_by(cand_nm) %>%
+  summarise(primary_mean_cand_nm=mean(contb_receipt_amt),
+            primary_median_cand_nm=median(contb_receipt_amt),
+            primary_sum_contribution = sum(contb_receipt_amt),
+            n=n())
+general_group_by_candidate<- general_election %>%
+  group_by(cand_nm) %>%
+  summarise(general_mean_cand_nm=mean(contb_receipt_amt),
+            general_median_cand_nm=median(contb_receipt_amt),
+            general_sum_contribution = sum(contb_receipt_amt),
+            n=n())
+
+primary <- ggplot(data= primary_group_by_candidate, 
+                  aes(x=cand_nm, y=primary_sum_contribution))+
+  geom_point()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_y_continuous(labels = scales::comma)
+
+general <- ggplot(data= general_group_by_candidate, 
+                  aes(x=cand_nm, y=general_sum_contribution))+
+  geom_point()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_y_continuous(labels = scales::comma)
+
+all <- ggplot(data= group_by_candidate, 
+              aes(x=cand_nm, y=sum_contribution))+
+  geom_point()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_y_continuous(labels = scales::comma)
+all
+primary
+general
+```
+
+> I don’t think these plots going to help me! The scales are different on 
+Y-axis and some candidates did not receive any contribution after primaries. 
+What if I put genral and primary election together in one plot? 
+
+
+
+```{r echo=FALSE, warning=FALSE}
+cand_pg_compare <- merge( general_group_by_candidate, primary_group_by_candidate , by='cand_nm', all = TRUE)
+
+
+cand_pg_compare <- subset( cand_pg_compare, select = -c(primary_mean_cand_nm,primary_median_cand_nm,general_mean_cand_nm, general_median_cand_nm, n.x, n.y) )
+
+gp_melted <- melt(cand_pg_compare, id.var= "cand_nm")
+ggplot(gp_melted, aes(x=cand_nm, y=value, color= variable ))+
+  geom_point(stat="identity")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="top")
+```
+
+
+
+> Now I can see and compare them better. Interesting point is even after 
+primaries, people continued to donate to some republican or democrat candidates
+beside trump and Clinton. 
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggplot(aes(x=contb_receipt_dt, y=contb_receipt_amt), data=election) +
+  geom_point(alpha = 0.01) +
+  geom_smooth(formula = contb_receipt_amt ~ contb_receipt_dt)+
+  scale_y_continuous(trans = "log10")
+```
+
+> The refunds and corporation donations make it difficult to detect a pattern 
+here. So I'm going to take look at individual donations.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+ggplot(aes(x=contb_receipt_dt, y=contb_receipt_amt), 
+       data=subset(election, contb_receipt_amt <2700)) +
+  geom_point(alpha=0.01, position='jitter') +
+  geom_smooth(formula = contb_receipt_amt ~ contb_receipt_dt)+
+  scale_y_continuous(trans = "log10")
+```
+
+> it looks with time individual contributors donated smaller and smaller amount
+of money. Also it is interesting to see how donating to different candidates 
+has changed during the lection. Specifically, I would like to see how it 
+changed for the top 4 donation recipients.
+
+```{r echo=FALSE, warning=FALSE}
+
+candidate_groups_date <- group_by(election, cand_nm, contb_receipt_dt)
+election_candidate_date <- summarise(candidate_groups_date, 
+                                        sum_contbr = sum(contb_receipt_amt),
+                                        mean_contbr = mean(contb_receipt_amt),
+                                        median_contbr = median(contb_receipt_amt)
+                                        )
+
+ggplot(data = subset(election_candidate_date, 
+                     cand_nm =="Trump, Donald J."|
+                     cand_nm =="Clinton, Hillary Rodham" | 
+                       cand_nm =="Sanders, Bernard" | 
+                       cand_nm =="Kasich, John R."  
+                         ), 
+       aes(contb_receipt_dt, sum_contbr)) +
+  geom_line(aes(color = cand_nm), alpha= 0.8) +
+  scale_x_date() +
+  scale_y_continuous( trans = "log10") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="top")+
+  labs(y = "Total Donations") 
+```
+
+> Another variable that I would like to investigate is the contributor's 
+occupation for individual donors. It looks for individual donors retired and 
+attorneys  donated the highest amount of money! I'm a little surprised by 
+almost half a million donation by not employed individuals! 
+
+```{r echo=FALSE, warning=FALSE}
+ind_contrb <- subset(election, contb_receipt_amt <2700)
+group_by_occupation<- ind_contrb %>%
+  group_by(contbr_occupation) %>%
+  summarise(occup_sum_contribution = sum(contb_receipt_amt),
+            n=n())
+head(arrange(group_by_occupation,desc(occup_sum_contribution)), n = 5)
+```
+> And finally I would like to see how contributions has changes accross Ohio 
+based on zipcodes:
+
+```{r echo=FALSE, warning=FALSE}
+group_by_zip <-  election %>%
+  group_by(contbr_zip) %>%
+  summarise(zip_sum_contribution = sum(contb_receipt_amt),
+            mean_sum_contribution = mean(contb_receipt_amt),
+            n=n())
+group_by_zip = na.omit(group_by_zip)
+head(arrange(group_by_zip,desc(zip_sum_contribution)), n = 5)
+head(arrange(group_by_zip,desc(n)), n = 5)
+head(arrange(group_by_zip,desc(mean_sum_contribution)), n = 5)
+```
+
+
+> There are a couple of interesting facts about donations based on zip codes:  
+1- zip code 44122 (Cleveland area) the highest amount of total donations, which
+is interesting because neither average donation nor number of donations in this
+zip code are not the highest in the State.  
+2- The highest amount of individual contribution happened in two zip code with 
+only 1 donations. I looked up those two: 43659 is very small zip code in Toledo 
+and 45262 is a P.O.Box. The next highest mean belongs to another small zip code
+in east of Ohio with only 4 donations. 
+There are 73 zip codes with only 1 donations. While I did not investigate all 
+73 of them, the hands full that I looked up were either one-block zip codes or 
+P.O.Boxes. The highest number of donations belongs to zip code 43214 in 
+Columbus with 2068 donations. I would like to see the distribution of donation 
+based on sum of donations and number of donations.
+
+
+```{r echo=FALSE, warning=FALSE}
+zip <- readOGR(dsn = "Ohio_zip_map", layer = "zip_code_area")
+zip <- fortify(zip, region="ZIP_CODE")
+group_by_zip$contbr_zip <- as.numeric(group_by_zip$contbr_zip)
+```
+
+```{r echo=FALSE, , warning=FALSE}
+ggplot() +
+  geom_map(data = group_by_zip, aes(map_id = contbr_zip, 
+                                    fill = zip_sum_contribution), map = zip) +
+  expand_limits(x = zip$long, y = zip$lat)+
+  scale_y_continuous(breaks=NULL)+
+  scale_x_continuous(breaks=NULL)+
+  theme(axis.title.x=element_blank())+
+  theme(axis.title.y=element_blank())+
+  scale_fill_gradient(low = "lightyellow", high = "darkgreen")
+```
+
+> This maps show three significantly darker green blue areas: Columbus, 
+Cincinnati, and Cleveland, which is not surprising since these three are 
+largest city in Ohio. But I don’t get much more than this from it. So I'm going
+to compare donations to Democrats and Republicans across Ohio.
+
+```{r echo=FALSE, , warning=FALSE}
+election_dems <- subset(election, party=='Democrat')
+group_by_zip_dems <-  election_dems %>%
+  group_by(contbr_zip) %>%
+  summarise(zip_sum_contribution = sum(contb_receipt_amt),
+            mean_sum_contribution = mean(contb_receipt_amt),
+            n=n())
+
+election_rep <- subset(election, party=='Republican')
+group_by_zip_rep <-  election_rep %>%
+  group_by(contbr_zip) %>%
+  summarise(zip_sum_contribution = sum(contb_receipt_amt),
+            mean_sum_contribution = mean(contb_receipt_amt),
+            n=n())
+
+```
+
+
+```{r echo=FALSE, , warning=FALSE}
+D <- ggplot() +
+  geom_map(data = group_by_zip_dems, aes(map_id = contbr_zip, fill = n), 
+           map = zip) +
+  expand_limits(x = zip$long, y = zip$lat)+
+  scale_y_continuous(breaks=NULL)+
+  scale_x_continuous(breaks=NULL)+
+  theme(axis.title.x=element_blank())+
+  theme(axis.title.y=element_blank())+
+    scale_fill_gradient(low = "lightblue", high = "darkblue",
+                        breaks = c(200, 400, 600, 800, 1000, 
+                                   1200,1400, 1600, 1800, 2000))+
+  coord_fixed()
+D
+```
+
+```{r echo=FALSE, , warning=FALSE}
+R <- ggplot() +
+  geom_map(data = group_by_zip_rep, aes(map_id = contbr_zip, fill = n), 
+           map = zip) + expand_limits(x = zip$long, y = zip$lat)+
+  scale_y_continuous(breaks=NULL)+ scale_x_continuous(breaks=NULL)+
+  theme(axis.title.x=element_blank())+ theme(axis.title.y=element_blank())+
+  scale_fill_gradient(low = "lightpink", high = "red",
+                      breaks = c(200, 400, 600, 800, 1000, 
+                                 1200,1400, 1600, 1800, 2000))+ coord_fixed()
+
+R
+```
+
+> Bothe parties received more money from high density urban areas republican 
+also received high number donation in lower-density zip codes as well. 
+
+# Bivariate Analysis
+### Talk about some of the relationships you observed in this part of the 
+###investigation. How did the feature(s) of interest vary with other features 
+###in the dataset?
+
+> 58% of the total contribution in Ohio went to the Republican Party. Since the
+number of Republican Party's candidates were 3 times more than democrats (5 
+Democrats and 16 Republicans) this difference makes sense. However, in each 
+party few candidates received the majority of the contributions. 
+Another observation is for the primary election, democrats received more 
+donations than the republicans, but for general elections republicans received 
+majority of the donations.   
+Finally, It looks like retired donated the majority of the money during the 
+2016 presidential election.
+
+### Did you observe any interesting relationships between the other features?
+> I found it really interesting that the unemployed folks donated half a 
+million to the campaigns! 
+
+# Multivariate Plots Section
+
+> Based what I learned about the donations, I wonder how the size of donation 
+is different for each candidate. 
+ 
+
+```{r echo=FALSE, , warning=FALSE}
+top_candidate <- c("Clinton, Hillary Rodham", "Sanders, Bernard", 
+                   "Carson, Benjamin S.", "Kasich, John R.", 
+                   "Trump, Donald J.", "Cruz, Rafael Edward 'Ted'")
+
+election_top_6 <- subset(election, cand_nm %in% top_candidate)
+
+ggplot(data = election_top_6, aes(contb_receipt_amt)) +
+  geom_histogram(binwidth = 50, aes(fill = cand_nm)) +
+  scale_x_continuous(limits=c(0, 2700), breaks = seq(0, 2750, 250)) +
+  labs(x = "Donation Amount", title = "Donations under $2700") +
+  scale_y_continuous(breaks = seq(0, 50000, 5000), limits=c(0,50000))
+
+
+```
+ 
+> The most common donation amount is $50 for all candidates. I'm going to make 
+the charts more specific. I would like to see these contributions for top 6 as 
+well as Clinton and Trump, for donations under $100.
+
+```{r echo=FALSE, warning=FALSE}
+two_cand <- subset(election, (cand_nm == "Clinton, Hillary Rodham" | 
+                                cand_nm =="Trump, Donald J.") &
+                     (election_tp == "G2016" | election_tp == "P2016") ,
+                   na.rm = TRUE) 
+
+p1 <- ggplot(data = election_top_6,
+             aes(contb_receipt_amt)) +
+  geom_histogram(binwidth = 5, aes(fill = cand_nm)) +
+  scale_x_continuous(limits = c(0, 100), breaks = seq(0, 100, 25)) +
+  labs(x = "Donation Amount", title = "Donations under $100") +
+  scale_y_continuous(breaks = seq(0, 30000, 5000))
+
+p2 <- ggplot(data= two_cand,
+             aes(contb_receipt_amt)) +
+  geom_histogram(binwidth = 5, aes(fill = cand_nm)) +
+  scale_x_continuous(limits = c(0, 100), breaks = seq(0, 100, 25)) +
+  labs(x = "Donation Amount", title = "Donations under $100") +
+  scale_y_continuous(breaks = seq(0, 30000, 5000))
+p1
+p2
+``` 
+
+> Ok! It looks $25 donation is the most common donation. Clinton Also received 
+the smallest donations as well. Did the donation amount's pattern changed 
+during the campaign year for these two candidates? 
+
+```{r echo=FALSE, warning=FALSE}
+ggplot(data=two_cand, aes(x = (contb_receipt_dt))) +
+   geom_point(aes(y = (two_cand$contb_receipt_amt), colour = two_cand$cand_nm),
+              show.legend = TRUE,  size=0.5, alpha=0.5)
+```
+
+```{r echo=FALSE, warning=FALSE}
+ggplot(data = two_cand,
+             aes(x=cand_nm, y= contb_receipt_amt, fill = election_tp)) +
+  geom_bar(stat="identity") 
+
+```
+ 
+ > The time series plot shows how trump's donations increased when he got the 
+ Republican Parties nomination. The stacked bar makes it really clear that 
+ while Trump received significantly less money during the primaries than 
+ Clinton, for the general election he was able to gather more donations. 
+
+# Multivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the 
+###investigation. Were there features that strengthened each other in terms of 
+###looking at your feature(s) of interest? Were there any interesting or surprising
+###interactions between features?  
+> Almost all of the relationships where predictable: more donations will be made
+closer to primary and general election day.
+Two major parties will receive more money than others as well as two nominees 
+from those parties. 
+
+------
+
+# Final Plots and Summary
+
+### Plot One
+```{r echo=FALSE, warning=FALSE, Plot_One}
+ggplot(data = subset(election_candidate_date, 
+                     cand_nm =="Clinton, Hillary Rodham" | 
+                       cand_nm =="Sanders, Bernard" | 
+                       cand_nm =="Carson, Benjamin S." | 
+                       cand_nm =="Kasich, John R." | 
+                       cand_nm =="Trump, Donald J." | 
+                       cand_nm =="Cruz, Rafael Edward 'Ted'" ), 
+       aes(contb_receipt_dt, sum_contbr)) +
+  geom_line(aes(color = cand_nm)) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b-%y")+ 
+  scale_y_continuous(trans = "log10") +
+  labs(y = "Total Donations in $", x= "Date", 
+       title = "Candidate Donations Over Time, Top 6 Candidates")+
+  theme(legend.position="bottom", legend.title = element_blank(),
+        axis.text.x = element_text(angle = 40, hjust = 1))
+
+```
+
+### Description One
+> This plot shows the monetary contribution over time to the top 6 candidates 
+in terms of over all donation. Sanders's campaign received money even after 
+2016 Democratic National Convention and nomination of Clinton as Democrats 
+candidate. It might be because his supporters were hoping to convince him to 
+run as an independent candidate. 
+This plot also shows interesting spikes in Trump and Kasich’s campaign in some 
+points. For Trump is it easy to explain: most of the donations happened after 
+he became Republican's nominee. For Kasich, the most noticeable spike happened 
+on mid December. 
+
+
+### Plot Two
+```{r echo=FALSE, warning=FALSE, Plot_Two}
+ggplot(data = election_top_6,
+             aes(contb_receipt_amt)) +
+  geom_histogram(binwidth = 5, aes(fill = cand_nm)) +
+  scale_x_continuous(limits = c(0, 100), breaks = seq(0, 100, 5)) +
+  labs(x = "Donation Amount", title ="Donations under $100, Top 6 Candidates ",
+       y ="Number of Donations") +
+  scale_y_continuous(breaks = seq(0, 30000, 5000))+
+  theme(legend.position="bottom", legend.title = element_blank(),
+        axis.text.x = element_text(angle = 40, hjust = 1))
+```
+
+### Description Two
+> This plot shows the under $100 donation for the top 6 donation recipients 
+candidates. I found this plot very interesting since it shows clearly what 
+sanders said during his campaign: average donation to his campaign was $27. 
+I think majority of his supporter donated somewhere around $25 so the mode of 
+donations to his campaign got so close to the average. 
+
+### Plot Three
+```{r echo=FALSE, Plot_Three}
+D <- ggplot() +
+  geom_map(data = group_by_zip_dems, aes(map_id = contbr_zip, fill = n), 
+           map = zip) + expand_limits(x = zip$long, y = zip$lat)+
+  scale_y_continuous(breaks=NULL) + scale_x_continuous(breaks=NULL) +
+  theme(axis.title.x = element_blank(), axis.title.y=element_blank(),
+        legend.position='bottom' )+labs(title = "Democrats") + 
+  scale_fill_gradient(low = "lightblue", high = "darkblue")+
+  coord_fixed()
+
+R <- ggplot() +
+  geom_map(data = group_by_zip_rep, aes(map_id = contbr_zip, fill = n), 
+           map = zip) + expand_limits(x = zip$long, y = zip$lat)+
+  scale_y_continuous(breaks=NULL)+scale_x_continuous(breaks=NULL)+
+  theme(axis.title.x=element_blank(), axis.title.y=element_blank(),
+        legend.position='bottom')+
+  labs(title = "Republican")+
+    scale_fill_gradient(low = "lightpink", high = "red")+
+  coord_fixed()
+grid.arrange(R, D, top = "Number of Donations to Political Parties", 
+             ncol = 2)
+```
+
+### Description Three  
+
+> I like this visualization because it shows how different areas donated 
+differently to Democrats and Republicans. While the darkness of the colors may 
+represent almost the same amount of contribution for both parties in some areas,
+but it is important to pay attention to the legend: the scales are extremely 
+different. I tried to force equal breaks for these two maps but unfortunately 
+it did not work. 
+
+# Reflection
+
+> Ohio 2016 presidential campaign contributions data has information on more 
+than 160000 campaign donations July 2014 to December 2016. While I enjoyed 
+working with such a large dataset and on a topic that I really interested in, 
+since this was my first big project in R faced some challenges.
+
+###Challenge and My Solutions  
+
+> •	The first big problem that I faced was a simple data cleaning for the zip 
+codes. After a lot of search I found substring() will solve part of my problem 
+in just 1 line of code.  
+•	I wanted to add a party variable to my dataset so I can summarize the data and
+visualize it based on political parties. I spend a good amount of time googling
+and learning about ifelse() and %in% which helped me to add that variable.  
+•	But the challenging part of data cleaning was removing the refunded 
+contributions. I looked into many Stack Overflow post, watched many YouTube 
+tutorials, looked into similar analysis and finally combination of all of those
+and with a hint from my husband I was able to use the zoo package with trial 
+and error! But it worked and I cleaned out the refunded records.   
+•	The most interesting and exciting part of visualization was the mapping. 
+Since I have many years of experience of using mapping software such as ArcGIS,
+I was really excited to try mapping in R. How ever I found it really 
+challenging. I used a shape file of Ohio’s zip codes and every single step took
+me a great deal of time. I spend two days on reading different resources and 
+finally a combination of online resources and Udacity’s awesome forum mentors 
+helped me to make a map.    
+•	Another problem that I faced was many times I had to go back to data cleaning
+and exclude some records for all analysis or for some of the plots. I think I 
+should have study the data in more depth at the beginning to avoid this going 
+back and forth.   
+•	I spend a good amount of time on thinking about the variables that I have and
+their possible relationships as well as what is the best way to present them. 
+Trying different plot types, sub setting the data and grouping it and making 
+new variables were the strategies that I used.  
+•	Using ggplot2 to the extend that I did was really awesome. I feel confident 
+that now I can use this package really well. 
+
+### Future Work
+
+> The first thing that comes to mind is probably adding different data from 
+reliable sources will take this analysis to the next level and makes it easy 
+to accept or reject after election analysis regarding the socio-economic group
+of people who donated and voted for Stein, Trump, Clinton, and Sanders. Census
+data will be a good resource for this and poverty, race, gender, and level of 
+education are the additional data that will help with this analysis. 
